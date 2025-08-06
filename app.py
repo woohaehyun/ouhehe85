@@ -143,28 +143,33 @@ if sales_file and purchase_file and stock_file:
             for key, group in merged.groupby(group_by_option):
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                    group.to_excel(writer, index=False, sheet_name="발주서")
                     workbook = writer.book
-                    worksheet = writer.sheets["발주서"]
+                    worksheet = workbook.add_worksheet("발주서")
 
-                    # 상단 제목
+                    # 제목
                     worksheet.merge_range("A1:K1", "신명약품 발주서",
                                           workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "font_size": 16}))
+
+                    # 회사 정보
                     worksheet.write("A2", "담당자: __________")
                     worksheet.write("E2", f"발주일: {datetime.today().strftime('%Y-%m-%d')}")
                     worksheet.write("I2", "대표이사 결재 [          ]")
+
+                    # 여백
+                    worksheet.write_blank("A3", None)
+                    worksheet.write_blank("A4", None)
 
                     # 서식
                     header_fmt = workbook.add_format({"bold": True, "bg_color": "#DCE6F1", "align": "center", "valign": "vcenter", "border": 1})
                     cell_fmt = workbook.add_format({"align": "center", "valign": "vcenter", "border": 1})
                     num_fmt = workbook.add_format({"align": "right", "valign": "vcenter", "border": 1, "num_format": "#,##0"})
 
-                    # 헤더 스타일
+                    # 헤더 작성 (5행)
                     for col_num, value in enumerate(group.columns.values):
-                        worksheet.write(3, col_num, value, header_fmt)
+                        worksheet.write(4, col_num, value, header_fmt)
 
-                    # 데이터 스타일 (안전형)
-                    for row_num, row_data in enumerate(group.values, start=4):
+                    # 데이터 작성
+                    for row_num, row_data in enumerate(group.values, start=5):
                         for col_num, cell_value in enumerate(row_data):
                             if pd.isna(cell_value):
                                 worksheet.write(row_num, col_num, "", cell_fmt)
@@ -174,13 +179,13 @@ if sales_file and purchase_file and stock_file:
                                 worksheet.write(row_num, col_num, str(cell_value), cell_fmt)
 
                     # 합계 행
-                    last_row = len(group) + 4
+                    last_row = len(group) + 5
                     worksheet.write(last_row, 0, "합계", header_fmt)
                     worksheet.write_formula(last_row, group.columns.get_loc("발주수량"),
-                                            f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}5:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}{last_row})",
+                                            f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}6:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}{last_row})",
                                             num_fmt)
                     worksheet.write_formula(last_row, group.columns.get_loc("합계금액"),
-                                            f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}5:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}{last_row})",
+                                            f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}6:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}{last_row})",
                                             num_fmt)
 
                     # 열 너비 자동
