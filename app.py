@@ -124,10 +124,14 @@ if sales_file and purchase_file and stock_file:
                       sales_df[["상 품 명", "포장단위", "매출단가"]].drop_duplicates(),
                       on=["상 품 명", "포장단위"], how="left")
 
-    # 금액·마진율 계산
+    # 매입단가 누락 보정
     merged["매입단가"] = merged["매입단가"].fillna(0)
+
+    # 합계금액 계산
     merged["합계금액"] = merged["발주수량"] * merged["매입단가"]
-    merged["마진율"] = ((merged["매출단가"] - merged["매입단가"]) / merged["매출단가"] * 100).round(1)
+
+    # 🔹 마진율 컬럼 제거
+    merged.drop(columns=["마진율"], inplace=True, errors="ignore")
 
     # 그룹 컬럼 보정
     if group_by_option not in merged.columns:
@@ -156,28 +160,19 @@ if sales_file and purchase_file and stock_file:
                     workbook = writer.book
                     worksheet = workbook.add_worksheet("발주서")
 
-                    # 제목
-                    worksheet.merge_range("A1:K1", "신명약품 발주서",
-                                          workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "font_size": 16}))
-                    worksheet.write("A2", "담당자: __________")
-                    worksheet.write("E2", f"발주일: {datetime.today().strftime('%Y-%m-%d')}")
-                    worksheet.write("I2", "대표이사 결재 [          ]")
-
-                    # 여백
-                    worksheet.write_blank("A3", None)
-                    worksheet.write_blank("A4", None)
-
-                    # 서식
-                    header_fmt = workbook.add_format({"bold": True, "bg_color": "#DCE6F1", "align": "center", "valign": "vcenter", "border": 1})
+                    # 🔹 제목/담당자/결재란 제거 → 바로 헤더 작성
+                    header_fmt = workbook.add_format({"bold": True, "bg_color": "#DCE6F1",
+                                                      "align": "center", "valign": "vcenter", "border": 1})
                     cell_fmt = workbook.add_format({"align": "center", "valign": "vcenter", "border": 1})
-                    num_fmt = workbook.add_format({"align": "right", "valign": "vcenter", "border": 1, "num_format": "#,##0"})
+                    num_fmt = workbook.add_format({"align": "right", "valign": "vcenter",
+                                                   "border": 1, "num_format": "#,##0"})
 
-                    # 헤더 작성 (5행)
+                    # 헤더 작성 (1행부터 시작)
                     for col_num, value in enumerate(group.columns.values):
-                        worksheet.write(4, col_num, value, header_fmt)
+                        worksheet.write(0, col_num, value, header_fmt)
 
                     # 데이터 작성
-                    for row_num, row_data in enumerate(group.values, start=5):
+                    for row_num, row_data in enumerate(group.values, start=1):
                         for col_num, cell_value in enumerate(row_data):
                             if pd.isna(cell_value):
                                 worksheet.write(row_num, col_num, "", cell_fmt)
@@ -187,15 +182,15 @@ if sales_file and purchase_file and stock_file:
                                 worksheet.write(row_num, col_num, str(cell_value), cell_fmt)
 
                     # 합계 행
-                    last_row = len(group) + 5
-                    worksheet.write(last_row, 0, "합계", header_fmt)
+                    last_row = len(group) + 1
                     if "발주수량" in group.columns:
+                        worksheet.write(last_row, 0, "합계", header_fmt)
                         worksheet.write_formula(last_row, group.columns.get_loc("발주수량"),
-                                                f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}6:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}{last_row})",
+                                                f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}2:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}{last_row})",
                                                 num_fmt)
                     if "합계금액" in group.columns:
                         worksheet.write_formula(last_row, group.columns.get_loc("합계금액"),
-                                                f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}6:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}{last_row})",
+                                                f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}2:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}{last_row})",
                                                 num_fmt)
 
                     # 열 너비 자동
@@ -207,7 +202,8 @@ if sales_file and purchase_file and stock_file:
                 zipf.writestr(f"{file_key} 발주서.xlsx", output.getvalue())
 
         zip_buffer.seek(0)
-        st.download_button("📥 ZIP 파일 다운로드", data=zip_buffer, file_name="발주서_엑셀.zip", mime="application/zip")
+        st.download_button("📥 ZIP 파일 다운로드", data=zip_buffer,
+                           file_name="발주서_엑셀.zip", mime="application/zip")
 
 else:
     st.warning("📂 사이드바에서 매출, 매입, 현재고 파일을 업로드하세요.")
