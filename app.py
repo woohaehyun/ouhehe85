@@ -17,19 +17,19 @@ with col2:
     st.title("💊 신명약품 발주서 생성 시스템")
 st.markdown("매입처/제조사별 발주서를 자동 생성하고, 조건별 필터링 후 Excel 파일로 다운로드하세요.")
 
-# 📌 표준 컬럼명 매핑
+# 표준 컬럼명 매핑
 def normalize_columns(df, mapping):
     df.rename(columns={k: v for k, v in mapping.items() if k in df.columns}, inplace=True)
     return df
 
-# 📌 필수 컬럼 체크
+# 필수 컬럼 체크
 def check_required_columns(df, required, name):
     missing = [col for col in required if col not in df.columns]
     if missing:
         st.error(f"{name}에 다음 컬럼이 없습니다: {', '.join(missing)}")
         st.stop()
 
-# 📂 파일 업로드
+# 파일 업로드
 st.sidebar.header("📂 파일 업로드")
 sales_file = st.sidebar.file_uploader("매출자료 업로드", type=["xlsx"])
 purchase_file = st.sidebar.file_uploader("매입자료 업로드", type=["xlsx"])
@@ -96,8 +96,12 @@ if sales_file and purchase_file and stock_file:
     last_month_qty = last_month_sales.groupby(["상 품 명", "포장단위"], as_index=False)["수량"].sum()
     last_month_qty.rename(columns={"수량": "전월판매량"}, inplace=True)
 
+    # 병합 시 불필요 컬럼 제거 후 진행
+    purchase_df_merge = purchase_df[["상 품 명", "포장단위", "매 입 처", "제 조 사", "매입단가"]].drop_duplicates()
+    stock_df_merge = stock_df[["매 입 처", "제 조 사", "상 품 명", "포장단위", "재고수량"]]
+
     # 현재고 병합
-    merged = pd.merge(last_month_qty, stock_df, on=["상 품 명", "포장단위"], how="left")
+    merged = pd.merge(last_month_qty, stock_df_merge, on=["상 품 명", "포장단위"], how="left")
 
     # 발주수량 계산
     merged["과재고"] = (merged["재고수량"] - merged["전월판매량"]).apply(lambda x: x if x > 0 else 0)
@@ -105,29 +109,29 @@ if sales_file and purchase_file and stock_file:
     merged["발주수량"] = merged["부족수량"]
 
     # 매입자료 병합
-    merged = pd.merge(
-        merged,
-        purchase_df[["상 품 명", "포장단위", "매 입 처", "제 조 사", "매입단가"]].drop_duplicates(),
-        on=["상 품 명", "포장단위"],
-        how="left"
-    )
-    merged["매입단가"] = merged["매입단가"].fillna(0)
+    merged = pd.merge(merged, purchase_df_merge, on=["상 품 명", "포장단위"], how="left")
+
+    # _x, _y 컬럼 정리
+    if "매 입 처_x" in merged.columns:
+        merged.drop(columns=["매 입 처_y"], inplace=True, errors="ignore")
+        merged.rename(columns={"매 입 처_x": "매 입 처"}, inplace=True)
+    if "제 조 사_x" in merged.columns:
+        merged.drop(columns=["제 조 사_y"], inplace=True, errors="ignore")
+        merged.rename(columns={"제 조 사_x": "제 조 사"}, inplace=True)
 
     # 매출단가 병합
-    merged = pd.merge(
-        merged,
-        sales_df[["상 품 명", "포장단위", "매출단가"]].drop_duplicates(),
-        on=["상 품 명", "포장단위"],
-        how="left"
-    )
+    merged = pd.merge(merged,
+                      sales_df[["상 품 명", "포장단위", "매출단가"]].drop_duplicates(),
+                      on=["상 품 명", "포장단위"], how="left")
 
     # 금액·마진율 계산
+    merged["매입단가"] = merged["매입단가"].fillna(0)
     merged["합계금액"] = merged["발주수량"] * merged["매입단가"]
     merged["마진율"] = ((merged["매출단가"] - merged["매입단가"]) / merged["매출단가"] * 100).round(1)
 
     # 그룹 컬럼 보정
     if group_by_option not in merged.columns:
-        merged[group_by_option] = "미지정"
+        merged[group_by_option] = "기타"
 
     # 미리보기
     if not merged.empty:
@@ -141,6 +145,12 @@ if sales_file and purchase_file and stock_file:
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
             for key, group in merged.groupby(group_by_option):
+                # 파일명 처리
+                if pd.isna(key) or str(key).strip() == "" or str(key).strip() == "미지정":
+                    file_key = "기타"
+                else:
+                    file_key = str(key).strip()
+
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
                     workbook = writer.book
@@ -149,8 +159,6 @@ if sales_file and purchase_file and stock_file:
                     # 제목
                     worksheet.merge_range("A1:K1", "신명약품 발주서",
                                           workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "font_size": 16}))
-
-                    # 회사 정보
                     worksheet.write("A2", "담당자: __________")
                     worksheet.write("E2", f"발주일: {datetime.today().strftime('%Y-%m-%d')}")
                     worksheet.write("I2", "대표이사 결재 [          ]")
@@ -181,19 +189,22 @@ if sales_file and purchase_file and stock_file:
                     # 합계 행
                     last_row = len(group) + 5
                     worksheet.write(last_row, 0, "합계", header_fmt)
-                    worksheet.write_formula(last_row, group.columns.get_loc("발주수량"),
-                                            f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}6:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}{last_row})",
-                                            num_fmt)
-                    worksheet.write_formula(last_row, group.columns.get_loc("합계금액"),
-                                            f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}6:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}{last_row})",
-                                            num_fmt)
+                    if "발주수량" in group.columns:
+                        worksheet.write_formula(last_row, group.columns.get_loc("발주수량"),
+                                                f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}6:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}{last_row})",
+                                                num_fmt)
+                    if "합계금액" in group.columns:
+                        worksheet.write_formula(last_row, group.columns.get_loc("합계금액"),
+                                                f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}6:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}{last_row})",
+                                                num_fmt)
 
                     # 열 너비 자동
                     for i, col in enumerate(group.columns):
                         col_width = max(len(str(col)), max(group[col].astype(str).map(len)))
                         worksheet.set_column(i, i, col_width + 2)
 
-                zipf.writestr(f"{key}_발주서.xlsx", output.getvalue())
+                # ZIP에 저장
+                zipf.writestr(f"{file_key} 발주서.xlsx", output.getvalue())
 
         zip_buffer.seek(0)
         st.download_button("📥 ZIP 파일 다운로드", data=zip_buffer, file_name="발주서_엑셀.zip", mime="application/zip")
