@@ -14,7 +14,7 @@ with col1:
     st.image("로고리뉴얼.png", width=100)
 with col2:
     st.title("💊 신명약품 발주서 생성 시스템")
-st.markdown("매입처별 발주서를 자동 생성하고, 조건별 필터링 후 Excel 파일로 다운로드하세요.")
+st.markdown("매입처/제조사별 발주서를 자동 생성하고, 조건별 필터링 후 Excel 파일로 다운로드하세요.")
 
 # 📌 함수: 표준 컬럼명 매핑
 def normalize_columns(df, mapping):
@@ -36,6 +36,7 @@ stock_file = st.sidebar.file_uploader("현재고 업로드", type=["xlsx"])
 
 # 분석 모드 선택
 mode = st.sidebar.radio("📅 분석 모드 선택", ["자동 모드 (최근 3개월)", "수동 모드"])
+group_by_option = st.sidebar.radio("📂 그룹 기준", ["매 입 처", "제 조 사"])
 
 if sales_file and purchase_file and stock_file:
     # 데이터 읽기
@@ -86,20 +87,6 @@ if sales_file and purchase_file and stock_file:
         filtered_sales = sales_df[(sales_df["명세일자"] >= pd.to_datetime(start_date)) &
                                   (sales_df["명세일자"] <= pd.to_datetime(end_date))]
 
-    # 📌 매입처·거래처·마진율 필터
-    suppliers = sorted(purchase_df["매 입 처"].dropna().unique())
-    customers = sorted(sales_df["매 출 처"].dropna().unique())
-    selected_suppliers = st.sidebar.multiselect("매입처 선택", suppliers)
-    selected_customers = st.sidebar.multiselect("거래처 선택", customers)
-    margin_options = list(range(1, 101))
-    selected_margins = st.sidebar.multiselect("마진율% 선택", margin_options)
-
-    if selected_suppliers:
-        purchase_df = purchase_df[purchase_df["매 입 처"].isin(selected_suppliers)]
-        stock_df = stock_df[stock_df["매 입 처"].isin(selected_suppliers)]
-    if selected_customers:
-        filtered_sales = filtered_sales[filtered_sales["매 출 처"].isin(selected_customers)]
-
     # 📌 전월 판매량 계산
     last_month_end = sales_df["명세일자"].max().replace(day=1) - timedelta(days=1)
     last_month_start = last_month_end.replace(day=1)
@@ -108,7 +95,7 @@ if sales_file and purchase_file and stock_file:
     last_month_qty = last_month_sales.groupby(["상 품 명", "포장단위"], as_index=False)["수량"].sum()
     last_month_qty.rename(columns={"수량": "전월판매량"}, inplace=True)
 
-    # 📌 현재고와 병합 (재고수량만)
+    # 📌 현재고와 병합
     merged = pd.merge(last_month_qty, stock_df, on=["상 품 명", "포장단위"], how="left")
 
     # 📌 발주수량 계산
@@ -133,43 +120,66 @@ if sales_file and purchase_file and stock_file:
         how="left"
     )
 
-    # 📌 매입처 기본값
-    if "매 입 처" in merged.columns:
-        merged["매 입 처"] = merged["매 입 처"].fillna("미지정")
-    else:
-        merged["매 입 처"] = "미지정"
-
     # 📌 금액·마진율 계산
     merged["합계금액"] = merged["발주수량"] * merged["매입단가"]
     merged["마진율"] = ((merged["매출단가"] - merged["매입단가"]) / merged["매출단가"] * 100).round(1)
 
-    # 📌 마진율 필터
-    if selected_margins:
-        merged = merged[merged["마진율"].isin(selected_margins)]
-
-    # 📌 발주서 미리보기
-    if merged is not None and not merged.empty:
-        st.subheader("📊 발주서 데이터 미리보기")
-        st.dataframe(merged)
-    else:
-        st.warning("⚠ 발주서 데이터가 없습니다. 조건을 조정하세요.")
+    # 📌 미리보기
+    st.subheader("📊 발주서 데이터 미리보기")
+    st.dataframe(merged)
 
     # 📌 발주서 ZIP 다운로드
     if st.button("📦 발주서 ZIP 다운로드"):
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
-            for supplier, group in merged.groupby("매 입 처"):
+            for key, group in merged.groupby(group_by_option):
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
                     group.to_excel(writer, index=False, sheet_name="발주서")
                     workbook = writer.book
                     worksheet = writer.sheets["발주서"]
+
+                    # 상단 제목
                     worksheet.merge_range("A1:K1", "신명약품 발주서",
                                           workbook.add_format({"bold": True, "align": "center", "valign": "vcenter", "font_size": 16}))
                     worksheet.write("A2", "담당자: __________")
                     worksheet.write("E2", f"발주일: {datetime.today().strftime('%Y-%m-%d')}")
                     worksheet.write("I2", "대표이사 결재 [          ]")
-                zipf.writestr(f"{supplier}_발주서.xlsx", output.getvalue())
+
+                    # 서식 정의
+                    header_fmt = workbook.add_format({"bold": True, "bg_color": "#DCE6F1", "align": "center", "valign": "vcenter", "border": 1})
+                    cell_fmt = workbook.add_format({"align": "center", "valign": "vcenter", "border": 1})
+                    num_fmt = workbook.add_format({"align": "right", "valign": "vcenter", "border": 1, "num_format": "#,##0"})
+
+                    # 헤더 스타일 적용
+                    for col_num, value in enumerate(group.columns.values):
+                        worksheet.write(3, col_num, value, header_fmt)
+
+                    # 데이터 스타일 적용
+                    for row_num, row_data in enumerate(group.values, start=4):
+                        for col_num, cell_value in enumerate(row_data):
+                            if isinstance(cell_value, (int, float)):
+                                worksheet.write(row_num, col_num, cell_value, num_fmt)
+                            else:
+                                worksheet.write(row_num, col_num, cell_value, cell_fmt)
+
+                    # 합계 행 추가
+                    last_row = len(group) + 4
+                    worksheet.write(last_row, 0, "합계", header_fmt)
+                    worksheet.write_formula(last_row, group.columns.get_loc("발주수량"),
+                                            f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}5:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('발주수량'))}{last_row})",
+                                            num_fmt)
+                    worksheet.write_formula(last_row, group.columns.get_loc("합계금액"),
+                                            f"=SUM({xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}5:{xlsxwriter.utility.xl_col_to_name(group.columns.get_loc('합계금액'))}{last_row})",
+                                            num_fmt)
+
+                    # 열 너비 자동 조정
+                    for i, col in enumerate(group.columns):
+                        col_width = max(len(str(col)), max(group[col].astype(str).map(len)))
+                        worksheet.set_column(i, i, col_width + 2)
+
+                zipf.writestr(f"{key}_발주서.xlsx", output.getvalue())
+
         zip_buffer.seek(0)
         st.download_button("📥 ZIP 파일 다운로드", data=zip_buffer, file_name="발주서_엑셀.zip", mime="application/zip")
 
