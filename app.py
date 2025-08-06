@@ -124,9 +124,16 @@ if sales_file and purchase_file and stock_file:
     merged["합계금액"] = merged["발주수량"] * merged["매입단가"]
     merged["마진율"] = ((merged["매출단가"] - merged["매입단가"]) / merged["매출단가"] * 100).round(1)
 
+    # 📌 그룹 컬럼이 없으면 생성
+    if group_by_option not in merged.columns:
+        merged[group_by_option] = "미지정"
+
     # 📌 미리보기
-    st.subheader("📊 발주서 데이터 미리보기")
-    st.dataframe(merged)
+    if not merged.empty:
+        st.subheader("📊 발주서 데이터 미리보기")
+        st.dataframe(merged)
+    else:
+        st.warning("⚠ 발주서 데이터가 없습니다. 조건을 조정하세요.")
 
     # 📌 발주서 ZIP 다운로드
     if st.button("📦 발주서 ZIP 다운로드"):
